@@ -14,11 +14,13 @@
 
 #include <math.h>
 
-#include "utils/memutils.h"
-#include "utils/hsearch.h"
+#include "nodes/bitmapset.h"
+#include "nodes/pathnodes.h"
 #include "nodes/pg_list.h"
 #include "optimizer/pathnode.h"
 #include "optimizer/paths.h"
+#include "utils/hsearch.h"
+#include "utils/memutils.h"
 
 #include "saio.h"
 #include "saio_util.h"
@@ -112,7 +114,6 @@ rebuild_join_rel_hash(PlannerInfo *root)
 	ListCell   *l;
 
 	/* Create the hash table */
-	MemSet(&hash_ctl, 0, sizeof(hash_ctl));
 	hash_ctl.keysize = sizeof(Relids);
 	hash_ctl.entrysize = sizeof(JoinHashEntry);
 	hash_ctl.hash = bitmap_hash;
@@ -121,7 +122,7 @@ rebuild_join_rel_hash(PlannerInfo *root)
 	hashtab = hash_create("JoinRelHashTable",
 						  256L,
 						  &hash_ctl,
-					HASH_ELEM | HASH_FUNCTION | HASH_COMPARE | HASH_CONTEXT);
+						  HASH_ELEM | HASH_FUNCTION | HASH_COMPARE | HASH_CONTEXT);
 
 	/* Insert all the already-existing joinrels */
 	foreach(l, root->join_rel_list)
@@ -167,11 +168,11 @@ recalculate(QueryTree *tree, bool fake, void *extra_data)
 	SaioPrivateData	*private;
 	RelOptInfo		*left, *right, *rel, **tree_rel;
 	MemoryContext	ctx;
-	ListCell		*prev, *cur;
 	bool			had_no_hash;
 	int				n;
 
-	private = (SaioPrivateData *) root->join_search_private;
+	private = SaioGetPrivate(root);
+	(void) private;
 
 	Assert(tree->left != NULL);
 	Assert(tree->right != NULL);
@@ -196,7 +197,6 @@ recalculate(QueryTree *tree, bool fake, void *extra_data)
 
 	ctx = MemoryContextSwitchTo(fake ? tree->tmpctx : tree->ctx);
 	n = list_length(root->join_rel_list);
-	prev = list_tail(root->join_rel_list);
 	had_no_hash = (root->join_rel_hash == NULL);
 	rel = make_join_rel(root, left, right);
 	MemoryContextSwitchTo(ctx);
@@ -204,9 +204,8 @@ recalculate(QueryTree *tree, bool fake, void *extra_data)
 		return false;
 	}
 	Assert(list_length(root->join_rel_list) == n + 1);
-	/* move the list cell to the correct memory context */
-	cur = list_tail(root->join_rel_list);
-	root->join_rel_list = list_delete_cell(root->join_rel_list, cur, prev);
+	/* drop the just-appended cell and re-append the rel in our context */
+	root->join_rel_list = list_delete_last(root->join_rel_list);
 	root->join_rel_list = lappend(root->join_rel_list, rel);
 	/* move the rel hash to the correct memory context */
 	if (had_no_hash && root->join_rel_hash != NULL)
@@ -287,7 +286,12 @@ check_possible_join(QueryTree *tree, bool fake, void *extra_data)
 		return false;
 	}
 
-	tree->tmp = palloc(sizeof(QueryTree));
+	/*
+	 * Allocate a placeholder RelOptInfo: subsequent walkers only read its
+	 * relids field but we must allocate the whole struct so we don't write
+	 * past the end of the buffer.
+	 */
+	tree->tmp = (RelOptInfo *) palloc0(sizeof(RelOptInfo));
 	tree->tmp->relids = joinrelids;
 	return true;
 }
@@ -435,7 +439,7 @@ saio_recalc_step(PlannerInfo *root, QueryTree *tree, List *all_trees)
 		}
 	}
 
-	private = (SaioPrivateData *) root->join_search_private;
+	private = SaioGetPrivate(root);
 
 	/* if less than four trees to choose from, return immediately */
 	if (list_length(all_trees) < 4)
@@ -507,7 +511,7 @@ init_tree_contexts(QueryTree *tree)
 static void
 saio_recalc_initialize(PlannerInfo *root, QueryTree *tree)
 {
-	SaioPrivateData	*private = (SaioPrivateData *) root->join_search_private;
+	SaioPrivateData	*private = SaioGetPrivate(root);
 	bool	ok;
 
 	private->savelength = list_length(root->join_rel_list);
@@ -525,7 +529,7 @@ saio_recalc_initialize(PlannerInfo *root, QueryTree *tree)
 static void
 saio_recalc_finalize(PlannerInfo *root, QueryTree *tree)
 {
-	SaioPrivateData	*private = (SaioPrivateData *) root->join_search_private;
+	SaioPrivateData	*private = SaioGetPrivate(root);
 
 	/* restore join_rel_list and join_rel_hash */
 	root->join_rel_list = list_truncate(root->join_rel_list,

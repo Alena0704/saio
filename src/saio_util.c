@@ -1,19 +1,17 @@
 /*------------------------------------------------------------------------
  *
- * saio_main.c
- *	  setup for Simulated Annealing query optimization
+ * saio_util.c
+ *	  helpers for Simulated Annealing query optimization
  *
  * Copyright (c) 2009, PostgreSQL Global Development Group
- *
- * $PostgreSQL$
  *
  *-------------------------------------------------------------------------
  */
 
 #include "postgres.h"
 
-#include <time.h>
-
+#include "common/pg_prng.h"
+#include "nodes/pathnodes.h"
 #include "optimizer/joininfo.h"
 #include "optimizer/paths.h"
 
@@ -38,28 +36,32 @@ desirable_join(PlannerInfo *root,
 }
 
 
-/* verbatim copy from geqo_random.c */
+/* same idea as geqo_set_seed() */
 void
 initialize_random_state(PlannerInfo *root, double seed)
 {
-	SaioPrivateData *private = (SaioPrivateData *) root->join_search_private;
+	SaioPrivateData *private = SaioGetPrivate(root);
 
-	if (seed == 0)
-		seed = (double) time(NULL);
-
-	memset(private->random_state, 0, sizeof(private->random_state));
-	memcpy(private->random_state,
-		   &seed,
-		   Min(sizeof(private->random_state), sizeof(seed)));
+	pg_prng_fseed(&private->random_state, seed);
 }
 
 
 double
 saio_rand(PlannerInfo *root)
 {
-	SaioPrivateData *private = (SaioPrivateData *) root->join_search_private;
+	SaioPrivateData *private = SaioGetPrivate(root);
 
-	return erand48(private->random_state);
+	return pg_prng_double(&private->random_state);
+}
+
+
+int
+saio_randint(PlannerInfo *root, int upper, int lower)
+{
+	SaioPrivateData *private = SaioGetPrivate(root);
+
+	return (int) pg_prng_uint64_range(&private->random_state,
+									  (uint64) lower, (uint64) upper);
 }
 
 

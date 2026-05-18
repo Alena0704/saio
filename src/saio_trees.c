@@ -12,11 +12,11 @@
 
 #include "postgres.h"
 
-#include "utils/memutils.h"
-#include "nodes/relation.h"
+#include "nodes/pathnodes.h"
 #include "nodes/pg_list.h"
 #include "optimizer/pathnode.h"
 #include "optimizer/paths.h"
+#include "utils/memutils.h"
 
 #include "saio.h"
 #include "saio_util.h"
@@ -36,11 +36,9 @@
 static List *
 merge_trees(PlannerInfo *root, List *result, QueryTree *tree, bool force)
 {
-	ListCell	*prev;
 	ListCell	*lc;
 
 	/* Go through the trees and find one to join the new one */
-	prev = NULL;
 	foreach(lc, result)
 	{
 		QueryTree	*other_tree = (QueryTree *) lfirst(lc);
@@ -83,13 +81,12 @@ merge_trees(PlannerInfo *root, List *result, QueryTree *tree, bool force)
 				set_cheapest(joinrel);
 
 				/* Remove the old tree from the list */
-				result = list_delete_cell(result, lc, prev);
+				result = list_delete_cell(result, lc);
 
 				/* Recursively merge the new tree into the list */
 				return merge_trees(root, result, new_tree, force);
 			}
 		}
-		prev = lc;
 	}
 
 	/* We don't care about the ordering, just add it at the beginning */
@@ -448,7 +445,7 @@ recalculate_tree(PlannerInfo *root, QueryTree *tree)
 void
 keep_minimum_state(PlannerInfo *root, QueryTree *tree, Cost new_cost)
 {
-	SaioPrivateData *private = (SaioPrivateData *) root->join_search_private;
+	SaioPrivateData *private = SaioGetPrivate(root);
 
 	if (private->previous_cost >= new_cost)
 	{

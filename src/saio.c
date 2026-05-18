@@ -6,26 +6,23 @@
  *
  * Copyright (c) 2009, PostgreSQL Global Development Group
  *
- * $PostgreSQL$
- *
  *-------------------------------------------------------------------------
  */
 #include "postgres.h"
 
 #include <math.h>
 
-#include "utils/memutils.h"
-#include "nodes/relation.h"
+#include "nodes/pathnodes.h"
 #include "nodes/pg_list.h"
+#include "optimizer/extendplan.h"
 #include "optimizer/pathnode.h"
 #include "optimizer/paths.h"
+#include "utils/memutils.h"
 
 #include "saio.h"
 #include "saio_util.h"
 #include "saio_trees.h"
 #include "saio_probes.h"
-
-extern SaioAlgorithm algorithm;
 
 /*
  * Save the current state of the variables that get modified during
@@ -35,7 +32,7 @@ extern SaioAlgorithm algorithm;
 void
 context_enter(PlannerInfo *root)
 {
-	SaioPrivateData	*private = (SaioPrivateData *) root->join_search_private;
+	SaioPrivateData *private = SaioGetPrivate(root);
 
 	/* join_rel_list and join_rel_hash get added to in make_join_rel() */
 	private->savelength = list_length(root->join_rel_list);
@@ -54,7 +51,7 @@ context_enter(PlannerInfo *root)
 void
 context_exit(PlannerInfo *root)
 {
-	SaioPrivateData	*private = (SaioPrivateData *) root->join_search_private;
+	SaioPrivateData *private = SaioGetPrivate(root);
 
 	/* restore join_rel_list and join_rel_hash */
 	root->join_rel_list = list_truncate(root->join_rel_list,
@@ -65,14 +62,14 @@ context_exit(PlannerInfo *root)
 	MemoryContextSwitchTo(private->old_context);
 
 	/* remove everything in the sketch context, but keep the context itself */
-	MemoryContextResetAndDeleteChildren(private->sketch_context);
+	MemoryContextReset(private->sketch_context);
 }
 
 
 void
 context_enter_mem(PlannerInfo *root)
 {
-	SaioPrivateData	*private = (SaioPrivateData *) root->join_search_private;
+	SaioPrivateData *private = SaioGetPrivate(root);
 
 	/* switch to the sketch context */
 	private->old_context = MemoryContextSwitchTo(private->sketch_context);
@@ -82,18 +79,19 @@ context_enter_mem(PlannerInfo *root)
 void
 context_exit_mem(PlannerInfo *root)
 {
-	SaioPrivateData	*private = (SaioPrivateData *) root->join_search_private;
+	SaioPrivateData *private = SaioGetPrivate(root);
+
 	MemoryContextSwitchTo(private->old_context);
 
 	/* remove everything in the sketch context, but keep the context itself */
-	MemoryContextResetAndDeleteChildren(private->sketch_context);
+	MemoryContextReset(private->sketch_context);
 }
 
 
 bool
 acceptable(PlannerInfo *root, Cost new_cost)
 {
-	SaioPrivateData *private = (SaioPrivateData *) root->join_search_private;
+	SaioPrivateData *private = SaioGetPrivate(root);
 
 	return compare_costs(root, private->previous_cost,
 						 new_cost, private->temperature);
@@ -129,7 +127,7 @@ compare_costs(PlannerInfo *root, Cost previous_cost,
 static bool
 equilibrium(PlannerInfo *root)
 {
-	SaioPrivateData	*private = (SaioPrivateData *) root->join_search_private;
+	SaioPrivateData *private = SaioGetPrivate(root);
 
 	private->elapsed_loops++;
 
@@ -148,7 +146,7 @@ equilibrium(PlannerInfo *root)
 static void
 reduce_temperature(PlannerInfo *root)
 {
-	SaioPrivateData	*private = (SaioPrivateData *) root->join_search_private;
+	SaioPrivateData *private = SaioGetPrivate(root);
 
 	private->temperature *= saio_temperature_reduction_factor;
 }
@@ -157,7 +155,7 @@ reduce_temperature(PlannerInfo *root)
 static bool
 frozen(PlannerInfo *root)
 {
-	SaioPrivateData	*private = (SaioPrivateData *) root->join_search_private;
+	SaioPrivateData *private = SaioGetPrivate(root);
 
 	/* can only be frozen when temperature < 1 */
 	if (private->temperature > 1)
@@ -179,8 +177,11 @@ saio(PlannerInfo *root, int levels_needed, List *initial_rels)
 
 	TRACE_SAIO_PLANNING_START();
 
-	/* Initialize private data */
-	root->join_search_private = (void *) &private;
+	/* Initialize private data through the planner-extension slot */
+	SetPlannerInfoExtensionState(root, SaioPlannerExtensionId, &private);
+
+	/* Let the core planner know we may re-plan during the search */
+	root->assumeReplanning = true;
 
 	/* Initialize the random state */
 	initialize_random_state(root, saio_seed);
@@ -191,16 +192,12 @@ saio(PlannerInfo *root, int levels_needed, List *initial_rels)
 	 */
 	private.sketch_context = AllocSetContextCreate(CurrentMemoryContext,
 												   "SAIO",
-												   ALLOCSET_DEFAULT_MINSIZE,
-												   ALLOCSET_DEFAULT_INITSIZE,
-												   ALLOCSET_DEFAULT_MAXSIZE);
+												   ALLOCSET_DEFAULT_SIZES);
 
 	/* Create a context for keeping the minimum state */
 	private.min_context = AllocSetContextCreate(CurrentMemoryContext,
 												"SAIO min",
-												ALLOCSET_DEFAULT_MINSIZE,
-												ALLOCSET_DEFAULT_INITSIZE,
-												ALLOCSET_DEFAULT_MAXSIZE);
+												ALLOCSET_DEFAULT_SIZES);
 	/*
 	 * Build a query tree from the initial relations. This should a tree that
 	 * represents any valid join order for the given set of rels.
@@ -286,7 +283,9 @@ saio(PlannerInfo *root, int levels_needed, List *initial_rels)
 	list_free(all_trees);
 	MemoryContextDelete(private.sketch_context);
 	MemoryContextDelete(private.min_context);
-	root->join_search_private = NULL;
+
+	/* Drop our reference from the PlannerInfo extension slot */
+	SetPlannerInfoExtensionState(root, SaioPlannerExtensionId, NULL);
 
 	TRACE_SAIO_PLANNING_DONE();
 

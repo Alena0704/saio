@@ -1,7 +1,4 @@
 /*
- * $PostgreSQL$
- *
- *
  * saio
  *
  * A Simulated Annealing algorithm for solving the query join order problem.
@@ -13,21 +10,29 @@
 #ifndef SAIO_H
 #define SAIO_H
 
+#include "common/pg_prng.h"
+#include "nodes/pathnodes.h"
+#include "optimizer/extendplan.h"
+
 #define SAIO_COST(rel) (rel)->cheapest_total_path->total_cost
 
-#if PG_VERSION_NUM >= 90100
+/*
+ * Modern Postgres dropped the version-specific compatibility shim.
+ * Custom GUC variables always take three hook arguments.
+ */
 #define SAIO_GUC_HOOK_VALUES NULL, NULL, NULL
-#else
-#define SAIO_GUC_HOOK_VALUES NULL, NULL
-#endif
 
 /* These get set by GUC */
+extern bool		enable_saio;
 extern double	saio_seed;
 extern int		saio_equilibrium_factor;
 extern double	saio_initial_temperature_factor;
 extern double	saio_temperature_reduction_factor;
 extern int		saio_moves_before_frozen;
 extern int		saio_move_algorithm;
+
+/* Planner-extension slot id, looked up once at module load */
+extern int		SaioPlannerExtensionId;
 
 /*
  * A tree that represents a join order.
@@ -73,7 +78,7 @@ typedef struct SaioPrivateData {
 	int				elapsed_loops;		/* loops elapsed */
 	double			temperature;		/* current system temperature */
 
-	unsigned short	random_state[3];	/* state for erand48() */
+	pg_prng_state	random_state;		/* PRNG state */
 } SaioPrivateData;
 
 
@@ -101,6 +106,19 @@ typedef struct SaioAlgorithm {
 	void (*finalize) (PlannerInfo *root, QueryTree *tree);
 } SaioAlgorithm;
 
+extern SaioAlgorithm algorithm;
+
+/*
+ * Fetch the per-PlannerInfo SAIO private block; per-call planner state is
+ * stored through the generic planner-extension mechanism (see extendplan.h).
+ */
+static inline SaioPrivateData *
+SaioGetPrivate(PlannerInfo *root)
+{
+	return (SaioPrivateData *)
+		GetPlannerInfoExtensionState(root, SaioPlannerExtensionId);
+}
+
 void context_enter(PlannerInfo *root);
 void context_exit(PlannerInfo *root);
 
@@ -115,6 +133,5 @@ bool compare_costs(PlannerInfo *root, Cost new_cost,
 RelOptInfo *saio(PlannerInfo *root, int levels_needed, List *initial_rels);
 
 void _PG_init(void);
-void _PG_fini(void);
 
 #endif	/* SAIO_H */

@@ -1,50 +1,50 @@
-EXTENSION    = saio
-EXTVERSION   = $(shell grep default_version $(EXTENSION).control | \
-               sed -e "s/default_version[[:space:]]*=[[:space:]]*'\([^']*\)'/\1/")
+# contrib/saio/Makefile
 
-DOCS         = $(wildcard doc/*.md)
-TESTS        = $(wildcard test/sql/*.sql)
-REGRESS      = $(patsubst test/sql/%.sql,%,$(TESTS))
-REGRESS_OPTS = --inputdir=test
-PG_CONFIG    = pg_config
+MODULE_big = saio
+EXTENSION  = saio
+EXTVERSION = 0.0.1
+
+OBJS = \
+	src/saio.o \
+	src/saio_main.o \
+	src/saio_recalc.o \
+	src/saio_trees.o \
+	src/saio_util.o
+
+DATA = saio--0.0.1.sql
+
+DOCS = $(wildcard doc/*.md)
+
+PGFILEDESC = "saio - join order search with simulated annealing"
 
 EXTRA_CLEAN = src/saio_probes.h
 
-MODULE_big = saio
-OBJS = src/saio_main.o src/saio_util.o src/saio_trees.o \
-	src/saio_recalc.o src/saio.o
-
-# make sure
-all: all-lib
-
-# check for DTrace support
-ifeq (,$(findstring --enable-dtrace,$(shell $(PG_CONFIG) --configure)))
-enable_dtrace = no
+ifdef USE_PGXS
+PG_CONFIG = pg_config
+PGXS := $(shell $(PG_CONFIG) --pgxs)
+include $(PGXS)
 else
-enable_dtrace = yes
+subdir = contrib/saio
+top_builddir = ../..
+include $(top_builddir)/src/Makefile.global
+include $(top_srcdir)/contrib/contrib-global.mk
 endif
 
+# DTrace support: when enabled add the probes object; otherwise expand the .d
+# file into a dummy header with sed.
 ifeq ($(enable_dtrace), yes)
 OBJS += src/saio_probes.o
-endif
-
-src/saio.o: src/saio_probes.h
 
 src/saio_probes.o: src/saio_probes.d
 	$(DTRACE) -C -G -s $< -o $@
 
-ifeq ($(enable_dtrace), no)
-src/saio_probes.h: src/Gen_dummy_probes.sed
-endif
-
 src/saio_probes.h: src/saio_probes.d
-ifeq ($(enable_dtrace), yes)
 	$(DTRACE) -C -h -s $< -o $@.tmp
 	sed -e 's/SAIO_/TRACE_SAIO_/g' $@.tmp >$@
 	rm $@.tmp
 else
+src/saio_probes.h: src/saio_probes.d src/Gen_dummy_probes.sed
 	sed -f src/Gen_dummy_probes.sed $< >$@
 endif
 
-PGXS := $(shell $(PG_CONFIG) --pgxs)
-include $(PGXS)
+src/saio.o src/saio_main.o src/saio_recalc.o src/saio_trees.o src/saio_util.o: src/saio_probes.h

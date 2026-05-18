@@ -5,17 +5,16 @@
  *
  * Copyright (c) 2009, PostgreSQL Global Development Group
  *
- * $PostgreSQL$
- *
  *-------------------------------------------------------------------------
  */
 #include "postgres.h"
 
 #include <limits.h>
 
-#include "utils/guc.h"
-#include "optimizer/paths.h"
+#include "optimizer/extendplan.h"
 #include "optimizer/geqo.h"
+#include "optimizer/paths.h"
+#include "utils/guc.h"
 
 #include "saio.h"
 
@@ -29,6 +28,9 @@ double	saio_initial_temperature_factor = 2.0;
 double	saio_temperature_reduction_factor = 0.9;
 int		saio_moves_before_frozen = 4;
 
+/* Planner extension id used to attach private state to a PlannerInfo */
+int		SaioPlannerExtensionId = -1;
+
 /* Saved hook value in case of unload */
 static join_search_hook_type prev_join_search_hook = NULL;
 
@@ -38,6 +40,8 @@ saio_main(PlannerInfo *root, int levels_needed, List *initial_rels)
 {
 	if (enable_saio)
 		return saio(root, levels_needed, initial_rels);
+	else if (prev_join_search_hook)
+		return prev_join_search_hook(root, levels_needed, initial_rels);
 	else if (enable_geqo && levels_needed >= geqo_threshold)
 		return geqo(root, levels_needed, initial_rels);
 	else
@@ -48,6 +52,9 @@ saio_main(PlannerInfo *root, int levels_needed, List *initial_rels)
 void
 _PG_init(void)
 {
+	/* Get an identifier for our private slot on PlannerInfo */
+	SaioPlannerExtensionId = GetPlannerExtensionId("saio");
+
 	 /* Define custom GUC */
 	DefineCustomBoolVariable("saio", "Use SA for query planning.", NULL,
 							 &enable_saio, true,
@@ -86,12 +93,4 @@ _PG_init(void)
 	/* Install hook */
 	prev_join_search_hook = join_search_hook;
 	join_search_hook = saio_main;
-}
-
-/* Module unload */
-void
-_PG_fini(void)
-{
-	/* Uninstall hook */
-	join_search_hook = prev_join_search_hook;
 }

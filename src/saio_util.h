@@ -1,7 +1,4 @@
 /*
- * $PostgreSQL$
- *
- *
  * saio
  *
  * A Simulated Annealing algorithm for solving the query join order problem.
@@ -15,10 +12,9 @@
 
 #include "postgres.h"
 
-#define OTHER_CHILD(node, child) ( (node)->left == (child) ? (node)->right : (node)->left )
+#include "nodes/pathnodes.h"
 
-#define saio_randint(root, upper, lower) \
-	( (int) floor( saio_rand(root)*(((upper)-(lower))+0.999999) ) + (lower) )
+#define OTHER_CHILD(node, child) ( (node)->left == (child) ? (node)->right : (node)->left )
 
 bool desirable_join(PlannerInfo *root,
 					RelOptInfo *outer_rel, RelOptInfo *inner_rel);
@@ -26,6 +22,7 @@ bool desirable_join(PlannerInfo *root,
 void initialize_random_state(PlannerInfo *root, double seed);
 
 double saio_rand(PlannerInfo *root);
+int saio_randint(PlannerInfo *root, int upper, int lower);
 
 bool join_can_be_legal(PlannerInfo *root, Relids relids1, Relids relids2,
 					   Relids joinrelids);
